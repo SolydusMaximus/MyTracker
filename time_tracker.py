@@ -174,7 +174,8 @@ def page_my_timesheet(user):
             st.write("No clients added to this week.")
         
         # We iterate over a copy so removing items doesn't break the loop
-        for cid in list(st.session_state['ts_clients']):
+        # FIX: Added enumerate here to get 'i' for unique keys
+        for i, cid in enumerate(list(st.session_state['ts_clients'])):
             c_name_row = clients_df[clients_df['id'] == cid]
             c_name = c_name_row.iloc[0]['name'] if not c_name_row.empty else "Unknown"
 
@@ -182,13 +183,13 @@ def page_my_timesheet(user):
             r_cols[0].text_input("C", value=c_name, disabled=True, label_visibility="collapsed", key=f"d_{cid}")
             
             row_sum = 0
-            for i, d in enumerate(week_dates):
+            for j, d in enumerate(week_dates):
                 val = 0.0
                 if not current_entries.empty:
                     match = current_entries[(current_entries['client_id'] == cid) & (current_entries['date'] == str(d))]
                     if not match.empty: val = float(match.iloc[0]['hours'])
                 
-                new_v = r_cols[i+1].number_input("H", min_value=0.0, step=0.5, value=val, key=f"h_{cid}_{d}", label_visibility="collapsed", disabled=is_locked)
+                new_v = r_cols[j+1].number_input("H", min_value=0.0, step=0.5, value=val, key=f"h_{cid}_{d}", label_visibility="collapsed", disabled=is_locked)
                 row_sum += new_v
             
             r_cols[8].markdown(f"**{row_sum:g}**")
@@ -196,7 +197,8 @@ def page_my_timesheet(user):
             
             # REMOVE BUTTON
             if not is_locked:
-                if r_cols[9].form_submit_button("❌", help="Remove row"):
+                # FIX: Added unique key using 'i'
+                if r_cols[9].form_submit_button("❌", help="Remove row", key=f"remove_btn_{i}"):
                     st.session_state['ts_clients'].remove(cid)
                     st.rerun()
             
