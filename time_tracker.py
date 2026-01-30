@@ -122,13 +122,32 @@ def page_my_timesheet(user):
     
     week_dates = get_week_dates(selected_week - timedelta(days=selected_week.weekday()))
 
+    # --- LOCKING / UNLOCK LOGIC ---
     subs_df = load_data("SubmittedWeeks")
     is_locked = False
+    lock_status = ""
+    
     if not subs_df.empty:
         match = subs_df[(subs_df['user_id'] == user['id']) & (subs_df['week_start'] == week_start_str)]
         if not match.empty:
             is_locked = True
-            st.info(f"🔒 Week of {week_start_str} is submitted.")
+            lock_status = match.iloc[0]['status']
+
+    # Display Lock Status & Unlock Request Button
+    if is_locked:
+        if lock_status == "Unlock Requested":
+            st.warning(f"🔒 Unlock requested for {week_start_str}. Waiting for Admin approval.")
+        else:
+            c_lock1, c_lock2 = st.columns([3, 1])
+            c_lock1.info(f"🔒 Week of {week_start_str} is submitted.")
+            if c_lock2.button("🔓 Request Unlock"):
+                # Update status to 'Unlock Requested'
+                idx = match.index[0]
+                subs_df.at[idx, 'status'] = "Unlock Requested"
+                save_data("SubmittedWeeks", subs_df)
+                st.success("Request sent to Admin.")
+                time.sleep(1)
+                st.rerun()
 
     clients_df = load_data("Clients")
     time_df = load_data("TimeEntries")
@@ -160,7 +179,6 @@ def page_my_timesheet(user):
                     st.rerun()
 
     st.write("")
-    # UPDATED COLUMN LAYOUT: Added extra small column at the end for the delete button
     cols = st.columns([3] + [1]*7 + [1] + [0.5])
     cols[0].markdown("**Client**")
     days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -173,8 +191,6 @@ def page_my_timesheet(user):
         if not st.session_state['ts_clients']:
             st.write("No clients added to this week.")
         
-        # We iterate over a copy so removing items doesn't break the loop
-        # FIX: Added enumerate here to get 'i' for unique keys
         for i, cid in enumerate(list(st.session_state['ts_clients'])):
             c_name_row = clients_df[clients_df['id'] == cid]
             c_name = c_name_row.iloc[0]['name'] if not c_name_row.empty else "Unknown"
@@ -195,9 +211,7 @@ def page_my_timesheet(user):
             r_cols[8].markdown(f"**{row_sum:g}**")
             grand_total += row_sum
             
-            # REMOVE BUTTON
             if not is_locked:
-                # FIX: Added unique key using 'i'
                 if r_cols[9].form_submit_button("❌", help="Remove row", key=f"remove_btn_{i}"):
                     st.session_state['ts_clients'].remove(cid)
                     st.rerun()
@@ -211,7 +225,6 @@ def page_my_timesheet(user):
             for cid in st.session_state['ts_clients']:
                 for d in week_dates:
                     key = f"h_{cid}_{d}"
-                    # Check if key exists (it might not if row was just added and not interacted with)
                     if key in st.session_state:
                         h = st.session_state[key]
                         if h > 0:
@@ -221,7 +234,6 @@ def page_my_timesheet(user):
                             })
             
             if not time_df.empty:
-                # Remove ALL entries for this user/week, effectively deleting removed rows from DB
                 clean_df = time_df[~((time_df['user_id'] == user['id']) & (time_df['week_start'] == week_start_str))]
             else:
                 clean_df = pd.DataFrame(columns=["user_id", "client_id", "date", "hours", "week_start"])
@@ -382,23 +394,38 @@ def page_submitted_timesheets(user):
         return
 
     st.markdown("### Result")
-    h1, h2, h3, h4 = st.columns(4)
+    # Added "Status" column to headers
+    h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 2, 2])
     h1.markdown("**Employee**")
     h2.markdown("**Week**")
     h3.markdown("**Date**")
-    h4.markdown("**Action**")
+    h4.markdown("**Status**")
+    h5.markdown("**Action**")
     st.divider()
 
     for idx, row in full.iterrows():
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 2])
         c1.write(row['name'])
         c2.write(row['week_start'])
         c3.write(row['submitted_at'])
+        c4.write(row['status'])
         
-        if c4.button("Open", key=f"op_{idx}"):
-            st.session_state['view_sub_id'] = row['user_id']
-            st.session_state['view_sub_week'] = row['week_start']
-            st.rerun()
+        # Admin Action for Unlock Requests
+        if user['role'] == "Admin" and row['status'] == "Unlock Requested":
+            if c5.button("🔓 UNLOCK", key=f"unl_{idx}", type="primary"):
+                # Remove the specific submission row
+                target_uid = row['user_id']
+                target_week = row['week_start']
+                subs_df = subs_df[~((subs_df['user_id'] == target_uid) & (subs_df['week_start'] == target_week))]
+                save_data("SubmittedWeeks", subs_df)
+                st.success("Unlocked successfully!")
+                time.sleep(1)
+                st.rerun()
+        else:
+            if c5.button("Open", key=f"op_{idx}"):
+                st.session_state['view_sub_id'] = row['user_id']
+                st.session_state['view_sub_week'] = row['week_start']
+                st.rerun()
         st.markdown("---")
 
     if 'view_sub_id' in st.session_state:
