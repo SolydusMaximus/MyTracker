@@ -121,6 +121,7 @@ def page_my_timesheet(user):
         week_start_str = str(selected_week - timedelta(days=selected_week.weekday()))
     
     week_dates = get_week_dates(selected_week - timedelta(days=selected_week.weekday()))
+    week_dates_str = [str(d) for d in week_dates] # For dropdowns
 
     # --- LOCKING / UNLOCK LOGIC ---
     subs_df = load_data("SubmittedWeeks")
@@ -133,7 +134,6 @@ def page_my_timesheet(user):
             is_locked = True
             lock_status = match.iloc[0]['status']
 
-    # Display Lock Status & Unlock Request Button
     if is_locked:
         if lock_status == "Unlock Requested":
             st.warning(f"🔒 Unlock requested for {week_start_str}. Waiting for Admin approval.")
@@ -141,7 +141,6 @@ def page_my_timesheet(user):
             c_lock1, c_lock2 = st.columns([3, 1])
             c_lock1.info(f"🔒 Week of {week_start_str} is submitted.")
             if c_lock2.button("🔓 Request Unlock"):
-                # Update status to 'Unlock Requested'
                 idx = match.index[0]
                 subs_df.at[idx, 'status'] = "Unlock Requested"
                 save_data("SubmittedWeeks", subs_df)
@@ -240,46 +239,113 @@ def page_my_timesheet(user):
             
             final_df = pd.concat([clean_df, pd.DataFrame(new_rows)], ignore_index=True) if new_rows else clean_df
             save_data("TimeEntries", final_df)
-            st.success("Saved!")
+            st.success("Saved Hours!")
             st.rerun()
 
-    if not is_locked:
-        st.divider()
-        st.subheader("📦 Production List")
-        with st.expander("Add Produced Asset"):
-            with st.form("prod_form"):
-                ac1, ac2, ac3, ac4 = st.columns(4)
-                p_date = ac1.selectbox("Date", week_dates)
-                p_client = ac2.selectbox("Client", clients_df['name'] if not clients_df.empty else [])
-                p_asset = ac3.selectbox("Asset", assets_df['name'] if not assets_df.empty else [])
-                p_amt = ac4.number_input("Amount", 1, 100, 1)
-                
-                if st.form_submit_button("Add"):
-                    prod_df = load_data("ProductionEntries")
-                    if not clients_df.empty and not assets_df.empty:
-                        cid = int(clients_df[clients_df['name'] == p_client]['id'].values[0])
-                        aid = int(assets_df[assets_df['name'] == p_asset]['id'].values[0])
-                        new_entry = {
-                            "user_id": int(user['id']), "client_id": cid, "date": str(p_date),
-                            "asset_id": aid, "amount": int(p_amt)
-                        }
-                        prod_df = pd.concat([prod_df, pd.DataFrame([new_entry])], ignore_index=True)
-                        save_data("ProductionEntries", prod_df)
-                        st.success("Asset added!")
-                    else:
-                        st.error("No clients/assets.")
+    # --- PRODUCTION LIST (UPDATED) ---
+    st.divider()
+    st.subheader("📦 Production List")
+    st.caption("Add or edit assets produced this week. These will lock upon submission.")
 
-        st.divider()
-        st.markdown("### Final Submission")
-        if grand_total > 0:
-            if st.button("✅ Submit Timesheet", type="primary"):
-                new_sub = {"user_id": int(user['id']), "week_start": week_start_str, "status": "Submitted", "submitted_at": str(datetime.datetime.now())}
-                subs_df = pd.concat([subs_df, pd.DataFrame([new_sub])], ignore_index=True)
-                save_data("SubmittedWeeks", subs_df)
-                st.balloons()
-                st.rerun()
-        else:
-            st.caption("Save hours (> 0) to enable submission.")
+    prod_df = load_data("ProductionEntries")
+    
+    # Filter prod entries for THIS week and THIS user
+    current_prod = pd.DataFrame()
+    if not prod_df.empty:
+        # Check if dates fall within this week
+        mask_user = prod_df['user_id'] == user['id']
+        mask_date = prod_df['date'].isin(week_dates_str)
+        current_prod = prod_df[mask_user & mask_date].copy()
+
+    # Prepare Display Dataframe (Map IDs to Names)
+    display_data = []
+    if not current_prod.empty:
+        for _, row in current_prod.iterrows():
+            c_name = ""
+            a_name = ""
+            if not clients_df.empty:
+                c_match = clients_df[clients_df['id'] == row['client_id']]
+                if not c_match.empty: c_name = c_match.iloc[0]['name']
+            if not assets_df.empty:
+                a_match = assets_df[assets_df['id'] == row['asset_id']]
+                if not a_match.empty: a_name = a_match.iloc[0]['name']
+            
+            display_data.append({
+                "Date": row['date'],
+                "Client": c_name,
+                "Asset": a_name,
+                "Amount": int(row['amount'])
+            })
+    
+    df_display = pd.DataFrame(display_data)
+
+    # Configuration for the Editor
+    client_options = clients_df['name'].tolist() if not clients_df.empty else []
+    asset_options = assets_df['name'].tolist() if not assets_df.empty else []
+
+    edited_prod_df = st.data_editor(
+        df_display,
+        num_rows="dynamic",
+        disabled=is_locked,
+        column_config={
+            "Date": st.column_config.SelectboxColumn("Date", options=week_dates_str, required=True, width="medium"),
+            "Client": st.column_config.SelectboxColumn("Client", options=client_options, required=True, width="medium"),
+            "Asset": st.column_config.SelectboxColumn("Asset", options=asset_options, required=True, width="medium"),
+            "Amount": st.column_config.NumberColumn("Amount", min_value=1, step=1, required=True, width="small")
+        },
+        use_container_width=True,
+        key="prod_editor"
+    )
+
+    if not is_locked:
+        if st.button("💾 Save Assets"):
+            # Reconstruct the Dataframe to save (Map Names back to IDs)
+            new_prod_rows = []
+            
+            # Helper lookups
+            c_map = dict(zip(clients_df['name'], clients_df['id'])) if not clients_df.empty else {}
+            a_map = dict(zip(assets_df['name'], assets_df['id'])) if not assets_df.empty else {}
+
+            for _, row in edited_prod_df.iterrows():
+                if row['Client'] and row['Asset'] and row['Date']:
+                    cid = c_map.get(row['Client'])
+                    aid = a_map.get(row['Asset'])
+                    if cid and aid:
+                        new_prod_rows.append({
+                            "user_id": int(user['id']),
+                            "client_id": int(cid),
+                            "date": str(row['Date']),
+                            "asset_id": int(aid),
+                            "amount": int(row['Amount'])
+                        })
+            
+            # Delete OLD entries for this week/user and Insert NEW
+            # 1. Filter out everything from DB that matches this user AND this week's dates
+            if not prod_df.empty:
+                # Keep rows that are NOT (this user AND this week)
+                mask_delete = (prod_df['user_id'] == user['id']) & (prod_df['date'].isin(week_dates_str))
+                prod_db_clean = prod_df[~mask_delete]
+            else:
+                prod_db_clean = pd.DataFrame(columns=["user_id", "client_id", "date", "asset_id", "amount"])
+
+            # 2. Concat
+            final_prod_db = pd.concat([prod_db_clean, pd.DataFrame(new_prod_rows)], ignore_index=True)
+            save_data("ProductionEntries", final_prod_db)
+            st.success("Assets List Updated!")
+            time.sleep(1)
+            st.rerun()
+
+    st.divider()
+    st.markdown("### Final Submission")
+    if grand_total > 0:
+        if st.button("✅ Submit Timesheet", type="primary", disabled=is_locked):
+            new_sub = {"user_id": int(user['id']), "week_start": week_start_str, "status": "Submitted", "submitted_at": str(datetime.datetime.now())}
+            subs_df = pd.concat([subs_df, pd.DataFrame([new_sub])], ignore_index=True)
+            save_data("SubmittedWeeks", subs_df)
+            st.balloons()
+            st.rerun()
+    else:
+        st.caption("Save hours (> 0) to enable submission.")
 
 def page_workload_details(user):
     st.header("📊 Workload Details")
@@ -394,7 +460,6 @@ def page_submitted_timesheets(user):
         return
 
     st.markdown("### Result")
-    # Added "Status" column to headers
     h1, h2, h3, h4, h5 = st.columns([2, 2, 2, 2, 2])
     h1.markdown("**Employee**")
     h2.markdown("**Week**")
