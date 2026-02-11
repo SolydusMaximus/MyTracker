@@ -277,7 +277,11 @@ def page_my_timesheet(user):
                 "Amount": int(row['amount'])
             })
     
-    df_display = pd.DataFrame(display_data)
+    # FIX: Ensure DataFrame has columns even if empty
+    if display_data:
+        df_display = pd.DataFrame(display_data)
+    else:
+        df_display = pd.DataFrame(columns=["Date", "Client", "Asset", "Amount"])
 
     # Configuration for the Editor
     client_options = clients_df['name'].tolist() if not clients_df.empty else []
