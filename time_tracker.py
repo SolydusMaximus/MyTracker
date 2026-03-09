@@ -19,8 +19,12 @@ REQUIRED_TABS = {
     "Users": ["id", "name", "username", "password", "role", "date_added"],
     "Clients": ["id", "name", "date_added"],
     "Assets": ["id", "name", "date_added"],
+    "CreativeTypes": ["id", "name", "date_added"],
+    "ContentTypes": ["id", "name", "date_added"],
     "TimeEntries": ["user_id", "client_id", "date", "hours", "week_start"],
-    "ProductionEntries": ["user_id", "client_id", "date", "asset_id", "amount"],
+    "ProductionEntries": ["user_id", "client_id", "date", "asset_id", "amount", 
+                          "title", "source_link", "ext_link", "time_spent", 
+                          "creative_type_id", "content_type_id"],
     "SubmittedWeeks": ["user_id", "week_start", "status", "submitted_at"]
 }
 
@@ -74,7 +78,9 @@ def load_data(tab_name):
             if col not in df.columns:
                 df[col] = None
 
-        for col in ['id', 'user_id', 'client_id', 'asset_id', 'hours', 'amount']:
+        # Convert numeric columns safely
+        numeric_cols = ['id', 'user_id', 'client_id', 'asset_id', 'hours', 'amount', 'time_spent', 'creative_type_id', 'content_type_id']
+        for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
@@ -121,7 +127,7 @@ def page_my_timesheet(user):
         week_start_str = str(selected_week - timedelta(days=selected_week.weekday()))
     
     week_dates = get_week_dates(selected_week - timedelta(days=selected_week.weekday()))
-    week_dates_str = [str(d) for d in week_dates] # For dropdowns
+    week_dates_str = [str(d) for d in week_dates]
 
     # --- LOCKING / UNLOCK LOGIC ---
     subs_df = load_data("SubmittedWeeks")
@@ -151,6 +157,8 @@ def page_my_timesheet(user):
     clients_df = load_data("Clients")
     time_df = load_data("TimeEntries")
     assets_df = load_data("Assets")
+    creative_types_df = load_data("CreativeTypes")
+    content_types_df = load_data("ContentTypes")
     
     current_entries = pd.DataFrame()
     if not time_df.empty:
@@ -242,60 +250,77 @@ def page_my_timesheet(user):
             st.success("Saved Hours!")
             st.rerun()
 
-    # --- PRODUCTION LIST (UPDATED) ---
+    # --- PRODUCTION LIST (EXPANDED) ---
     st.divider()
     st.subheader("📦 Production List")
-    st.caption("Add or edit assets produced this week. These will lock upon submission.")
+    st.caption("Log details of assets produced. Please use full URLs for links (e.g., https://...)")
 
     prod_df = load_data("ProductionEntries")
     
-    # Filter prod entries for THIS week and THIS user
     current_prod = pd.DataFrame()
     if not prod_df.empty:
-        # Check if dates fall within this week
         mask_user = prod_df['user_id'] == user['id']
         mask_date = prod_df['date'].isin(week_dates_str)
         current_prod = prod_df[mask_user & mask_date].copy()
 
-    # Prepare Display Dataframe (Map IDs to Names)
     display_data = []
     if not current_prod.empty:
         for _, row in current_prod.iterrows():
-            c_name = ""
-            a_name = ""
+            c_name, a_name, ct_name, cnt_name = "", "", "", ""
+            
             if not clients_df.empty:
                 c_match = clients_df[clients_df['id'] == row['client_id']]
                 if not c_match.empty: c_name = c_match.iloc[0]['name']
             if not assets_df.empty:
                 a_match = assets_df[assets_df['id'] == row['asset_id']]
                 if not a_match.empty: a_name = a_match.iloc[0]['name']
+            if not creative_types_df.empty:
+                ct_match = creative_types_df[creative_types_df['id'] == row.get('creative_type_id', 0)]
+                if not ct_match.empty: ct_name = ct_match.iloc[0]['name']
+            if not content_types_df.empty:
+                cnt_match = content_types_df[content_types_df['id'] == row.get('content_type_id', 0)]
+                if not cnt_match.empty: cnt_name = cnt_match.iloc[0]['name']
             
+            # Map None to empty strings for UI safety
             display_data.append({
                 "Date": row['date'],
+                "Title": str(row.get('title', '')) if row.get('title') else "",
                 "Client": c_name,
+                "Creative Type": ct_name,
+                "Content Type": cnt_name,
                 "Asset": a_name,
+                "Source Link": str(row.get('source_link', '')) if row.get('source_link') else "",
+                "External Link": str(row.get('ext_link', '')) if row.get('ext_link') else "",
+                "Time Spent (Hrs)": float(row.get('time_spent', 0.0)),
                 "Amount": int(row['amount'])
             })
     
-    # FIX: Ensure DataFrame has columns even if empty
     if display_data:
         df_display = pd.DataFrame(display_data)
     else:
-        df_display = pd.DataFrame(columns=["Date", "Client", "Asset", "Amount"])
+        df_display = pd.DataFrame(columns=["Date", "Title", "Client", "Creative Type", "Content Type", "Asset", "Source Link", "External Link", "Time Spent (Hrs)", "Amount"])
 
-    # Configuration for the Editor
+    # Configuration Options
     client_options = clients_df['name'].tolist() if not clients_df.empty else []
     asset_options = assets_df['name'].tolist() if not assets_df.empty else []
+    creative_options = creative_types_df['name'].tolist() if not creative_types_df.empty else []
+    content_options = content_types_df['name'].tolist() if not content_types_df.empty else []
 
     edited_prod_df = st.data_editor(
         df_display,
         num_rows="dynamic",
         disabled=is_locked,
         column_config={
-            "Date": st.column_config.SelectboxColumn("Date", options=week_dates_str, required=True, width="medium"),
-            "Client": st.column_config.SelectboxColumn("Client", options=client_options, required=True, width="medium"),
-            "Asset": st.column_config.SelectboxColumn("Asset", options=asset_options, required=True, width="medium"),
-            "Amount": st.column_config.NumberColumn("Amount", min_value=1, step=1, required=True, width="small")
+            "Date": st.column_config.SelectboxColumn("Date", options=week_dates_str, required=True, width="small"),
+            "Title": st.column_config.TextColumn("Title Asset Pack", required=True, width="medium"),
+            "Client": st.column_config.SelectboxColumn("Client/Service", options=client_options, required=True, width="medium"),
+            "Creative Type": st.column_config.SelectboxColumn("Creative Type", options=creative_options, required=True, width="medium"),
+            "Content Type": st.column_config.SelectboxColumn("Content Type", options=content_options, required=True, width="medium"),
+            "Asset": st.column_config.SelectboxColumn("Asset Category", options=asset_options, required=True, width="small"),
+            "Source Link": st.column_config.LinkColumn("Source Link (Drive/Canva)", width="medium"),
+            "External Link": st.column_config.LinkColumn("External Link", width="medium"),
+            "Time Spent (Hrs)": st.column_config.NumberColumn("Hours", min_value=0.0, step=0.5, required=True, width="small"),
+            "Amount": st.column_config.NumberColumn("Qty", min_value=1, step=1, required=True, width="small")
         },
         use_container_width=True,
         key="prod_editor"
@@ -303,36 +328,41 @@ def page_my_timesheet(user):
 
     if not is_locked:
         if st.button("💾 Save Assets"):
-            # Reconstruct the Dataframe to save (Map Names back to IDs)
             new_prod_rows = []
             
-            # Helper lookups
             c_map = dict(zip(clients_df['name'], clients_df['id'])) if not clients_df.empty else {}
             a_map = dict(zip(assets_df['name'], assets_df['id'])) if not assets_df.empty else {}
+            ct_map = dict(zip(creative_types_df['name'], creative_types_df['id'])) if not creative_types_df.empty else {}
+            cnt_map = dict(zip(content_types_df['name'], content_types_df['id'])) if not content_types_df.empty else {}
 
             for _, row in edited_prod_df.iterrows():
                 if row['Client'] and row['Asset'] and row['Date']:
                     cid = c_map.get(row['Client'])
                     aid = a_map.get(row['Asset'])
+                    ctid = ct_map.get(row['Creative Type'], 0)
+                    cntid = cnt_map.get(row['Content Type'], 0)
+                    
                     if cid and aid:
                         new_prod_rows.append({
                             "user_id": int(user['id']),
                             "client_id": int(cid),
                             "date": str(row['Date']),
                             "asset_id": int(aid),
-                            "amount": int(row['Amount'])
+                            "amount": int(row['Amount']),
+                            "title": str(row['Title']) if pd.notna(row['Title']) else "",
+                            "source_link": str(row['Source Link']) if pd.notna(row['Source Link']) else "",
+                            "ext_link": str(row['External Link']) if pd.notna(row['External Link']) else "",
+                            "time_spent": float(row['Time Spent (Hrs)']) if pd.notna(row['Time Spent (Hrs)']) else 0.0,
+                            "creative_type_id": int(ctid),
+                            "content_type_id": int(cntid)
                         })
             
-            # Delete OLD entries for this week/user and Insert NEW
-            # 1. Filter out everything from DB that matches this user AND this week's dates
             if not prod_df.empty:
-                # Keep rows that are NOT (this user AND this week)
                 mask_delete = (prod_df['user_id'] == user['id']) & (prod_df['date'].isin(week_dates_str))
                 prod_db_clean = prod_df[~mask_delete]
             else:
-                prod_db_clean = pd.DataFrame(columns=["user_id", "client_id", "date", "asset_id", "amount"])
+                prod_db_clean = pd.DataFrame(columns=REQUIRED_TABS["ProductionEntries"])
 
-            # 2. Concat
             final_prod_db = pd.concat([prod_db_clean, pd.DataFrame(new_prod_rows)], ignore_index=True)
             save_data("ProductionEntries", final_prod_db)
             st.success("Assets List Updated!")
@@ -370,6 +400,8 @@ def page_workload_details(user):
     clients_df = load_data("Clients")
     prod_df = load_data("ProductionEntries")
     assets_df = load_data("Assets")
+    creative_types_df = load_data("CreativeTypes")
+    content_types_df = load_data("ContentTypes")
 
     mask = (time_df['date'] >= str(start_date)) & (time_df['date'] <= str(end_date))
     filtered_time = time_df.loc[mask] if not time_df.empty else pd.DataFrame()
@@ -401,7 +433,7 @@ def page_workload_details(user):
     st.divider()
     if not prod_df.empty and 'date' in prod_df.columns:
         p_mask = (prod_df['date'] >= str(start_date)) & (prod_df['date'] <= str(end_date))
-        filtered_prod = prod_df.loc[p_mask]
+        filtered_prod = prod_df.loc[p_mask].copy()
     else:
         filtered_prod = pd.DataFrame()
     
@@ -409,9 +441,41 @@ def page_workload_details(user):
         if not filtered_prod.empty:
             filtered_prod = filtered_prod[filtered_prod['user_id'] == user['id']]
 
+    # Manager Export View
+    if user['role'] == 'Admin':
+        st.subheader("Raw Production Export")
+        st.caption("A fully mapped view of all assets produced for easy exporting/reporting.")
+        if not filtered_prod.empty:
+            # Safely merge everything for a clean export table
+            export_df = filtered_prod.copy()
+            if not users_df.empty:
+                export_df = pd.merge(export_df, users_df[['id', 'name']], left_on='user_id', right_on='id', how='left').rename(columns={'name': 'Creative (Employee)'}).drop(columns=['id'])
+            if not clients_df.empty:
+                export_df = pd.merge(export_df, clients_df[['id', 'name']], left_on='client_id', right_on='id', how='left').rename(columns={'name': 'Client/Service'}).drop(columns=['id'])
+            if not assets_df.empty:
+                export_df = pd.merge(export_df, assets_df[['id', 'name']], left_on='asset_id', right_on='id', how='left').rename(columns={'name': 'Asset'}).drop(columns=['id'])
+            if not creative_types_df.empty:
+                export_df = pd.merge(export_df, creative_types_df[['id', 'name']], left_on='creative_type_id', right_on='id', how='left').rename(columns={'name': 'Creative Type'}).drop(columns=['id'])
+            if not content_types_df.empty:
+                export_df = pd.merge(export_df, content_types_df[['id', 'name']], left_on='content_type_id', right_on='id', how='left').rename(columns={'name': 'Content Type'}).drop(columns=['id'])
+            
+            clean_columns = {
+                'date': 'Delivered On', 'title': 'Title Asset Pack', 'source_link': 'Source Link', 
+                'ext_link': 'External Link', 'amount': 'Qty', 'time_spent': 'Time Spent (Hrs)'
+            }
+            export_df = export_df.rename(columns=clean_columns)
+            
+            cols_to_display = ['Delivered On', 'Title Asset Pack', 'Source Link', 'External Link', 'Client/Service', 'Qty', 'Time Spent (Hrs)', 'Creative Type', 'Content Type', 'Asset', 'Creative (Employee)']
+            existing_cols = [c for c in cols_to_display if c in export_df.columns]
+            
+            st.dataframe(export_df[existing_cols], use_container_width=True)
+        else:
+            st.info("No production data available for this month.")
+        st.divider()
+
     col_a, col_b = st.columns(2)
     with col_a:
-        st.markdown("**Assets Produced (Total)**")
+        st.markdown("**Assets Produced (Total Qty)**")
         if not filtered_prod.empty and not assets_df.empty:
             a_merge = pd.merge(filtered_prod, assets_df, left_on='asset_id', right_on='id')
             a_stats = a_merge.groupby('name')['amount'].sum().reset_index()
@@ -479,10 +543,8 @@ def page_submitted_timesheets(user):
         c3.write(row['submitted_at'])
         c4.write(row['status'])
         
-        # Admin Action for Unlock Requests
         if user['role'] == "Admin" and row['status'] == "Unlock Requested":
             if c5.button("🔓 UNLOCK", key=f"unl_{idx}", type="primary"):
-                # Remove the specific submission row
                 target_uid = row['user_id']
                 target_week = row['week_start']
                 subs_df = subs_df[~((subs_df['user_id'] == target_uid) & (subs_df['week_start'] == target_week))]
@@ -567,52 +629,77 @@ def page_manage_users(current_user):
                 st.success("Users updated successfully!")
                 st.rerun()
 
-def page_clients_assets():
-    st.header("Clients & Assets")
-    c1, c2 = st.columns(2)
+def page_admin_data():
+    st.header("Admin Data Management")
+    st.caption("Manage dropdown options available to employees.")
     
-    with c1:
-        st.subheader("Clients")
+    row1_c1, row1_c2 = st.columns(2)
+    
+    with row1_c1:
+        st.subheader("Clients / Services")
         clients_df = load_data("Clients")
         with st.form("add_cli"):
-            nc = st.text_input("New Client Name")
-            if st.form_submit_button("Add Client"):
+            nc = st.text_input("New Client/Service")
+            if st.form_submit_button("Add"):
                 new_c = {"id": generate_id(clients_df), "name": nc, "date_added": str(date.today())}
                 save_data("Clients", pd.concat([clients_df, pd.DataFrame([new_c])], ignore_index=True))
                 st.rerun()
         if not clients_df.empty:
-            edited_cli = st.data_editor(
-                clients_df,
-                column_config={"id": st.column_config.NumberColumn(disabled=True)},
-                num_rows="dynamic",
-                key="cli_editor",
-                use_container_width=True
-            )
-            if st.button("Save Clients"):
+            edited_cli = st.data_editor(clients_df, column_config={"id": st.column_config.NumberColumn(disabled=True)}, num_rows="dynamic", key="cli_ed", use_container_width=True)
+            if st.button("Save Clients/Services"):
                 save_data("Clients", edited_cli)
-                st.success("Clients updated!")
+                st.success("Updated!")
                 st.rerun()
 
-    with c2:
-        st.subheader("Assets")
+    with row1_c2:
+        st.subheader("Asset Categories")
         assets_df = load_data("Assets")
         with st.form("add_ass"):
-            na = st.text_input("New Asset Name")
-            if st.form_submit_button("Add Asset"):
+            na = st.text_input("New Asset Category")
+            if st.form_submit_button("Add"):
                 new_a = {"id": generate_id(assets_df), "name": na, "date_added": str(date.today())}
                 save_data("Assets", pd.concat([assets_df, pd.DataFrame([new_a])], ignore_index=True))
                 st.rerun()
         if not assets_df.empty:
-            edited_ass = st.data_editor(
-                assets_df,
-                column_config={"id": st.column_config.NumberColumn(disabled=True)},
-                num_rows="dynamic",
-                key="ass_editor",
-                use_container_width=True
-            )
-            if st.button("Save Assets"):
+            edited_ass = st.data_editor(assets_df, column_config={"id": st.column_config.NumberColumn(disabled=True)}, num_rows="dynamic", key="ass_ed", use_container_width=True)
+            if st.button("Save Asset Categories"):
                 save_data("Assets", edited_ass)
-                st.success("Assets updated!")
+                st.success("Updated!")
+                st.rerun()
+
+    st.divider()
+    row2_c1, row2_c2 = st.columns(2)
+    
+    with row2_c1:
+        st.subheader("Creative Types")
+        creative_types_df = load_data("CreativeTypes")
+        with st.form("add_ct"):
+            n_ct = st.text_input("New Creative Type (e.g., Video, Static)")
+            if st.form_submit_button("Add"):
+                new_ct = {"id": generate_id(creative_types_df), "name": n_ct, "date_added": str(date.today())}
+                save_data("CreativeTypes", pd.concat([creative_types_df, pd.DataFrame([new_ct])], ignore_index=True))
+                st.rerun()
+        if not creative_types_df.empty:
+            edited_ct = st.data_editor(creative_types_df, column_config={"id": st.column_config.NumberColumn(disabled=True)}, num_rows="dynamic", key="ct_ed", use_container_width=True)
+            if st.button("Save Creative Types"):
+                save_data("CreativeTypes", edited_ct)
+                st.success("Updated!")
+                st.rerun()
+
+    with row2_c2:
+        st.subheader("Content Types")
+        content_types_df = load_data("ContentTypes")
+        with st.form("add_cnt"):
+            n_cnt = st.text_input("New Content Type (e.g., General Company News)")
+            if st.form_submit_button("Add"):
+                new_cnt = {"id": generate_id(content_types_df), "name": n_cnt, "date_added": str(date.today())}
+                save_data("ContentTypes", pd.concat([content_types_df, pd.DataFrame([new_cnt])], ignore_index=True))
+                st.rerun()
+        if not content_types_df.empty:
+            edited_cnt = st.data_editor(content_types_df, column_config={"id": st.column_config.NumberColumn(disabled=True)}, num_rows="dynamic", key="cnt_ed", use_container_width=True)
+            if st.button("Save Content Types"):
+                save_data("ContentTypes", edited_cnt)
+                st.success("Updated!")
                 st.rerun()
 
 def page_my_profile(user):
@@ -687,7 +774,7 @@ def main():
     elif page == "Manage users": 
         if role == "Admin": page_manage_users(user)
     elif page == "Clients and assets":
-        if role == "Admin": page_clients_assets()
+        if role == "Admin": page_admin_data()
 
 if __name__ == "__main__":
     main()
