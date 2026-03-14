@@ -24,7 +24,8 @@ REQUIRED_TABS = {
     "ProductionEntries": ["user_id", "client_id", "date", "asset_id", "amount", 
                           "title", "source_link", "ext_link", "time_spent", 
                           "creative_type_id"],
-    "SubmittedWeeks": ["user_id", "week_start", "status", "submitted_at"]
+    "SubmittedWeeks": ["user_id", "week_start", "status", "submitted_at"],
+    "AssetLibrary": ["Title", "Employee", "Client", "Date", "Asset Category", "Creative Type", "Source Link", "External Link"]
 }
 
 # --- GOOGLE SHEETS CONNECTION ---
@@ -102,6 +103,53 @@ def save_data(tab_name, df):
 def generate_id(df):
     if df.empty or 'id' not in df.columns: return 1
     return int(df['id'].max()) + 1
+
+def update_asset_library():
+    prod_df = load_data("ProductionEntries")
+    if prod_df.empty:
+        save_data("AssetLibrary", pd.DataFrame(columns=REQUIRED_TABS["AssetLibrary"]))
+        return
+
+    users_df = load_data("Users")
+    clients_df = load_data("Clients")
+    assets_df = load_data("Assets")
+    creative_types_df = load_data("CreativeTypes")
+
+    export_df = prod_df.copy()
+
+    # Merge to get names instead of IDs
+    if not users_df.empty:
+        export_df = pd.merge(export_df, users_df[['id', 'name']], left_on='user_id', right_on='id', how='left').rename(columns={'name': 'Employee'}).drop(columns=['id', 'user_id'], errors='ignore')
+    else: export_df['Employee'] = ""
+
+    if not clients_df.empty:
+        export_df = pd.merge(export_df, clients_df[['id', 'name']], left_on='client_id', right_on='id', how='left').rename(columns={'name': 'Client'}).drop(columns=['id', 'client_id'], errors='ignore')
+    else: export_df['Client'] = ""
+
+    if not assets_df.empty:
+        export_df = pd.merge(export_df, assets_df[['id', 'name']], left_on='asset_id', right_on='id', how='left').rename(columns={'name': 'Asset Category'}).drop(columns=['id', 'asset_id'], errors='ignore')
+    else: export_df['Asset Category'] = ""
+
+    if not creative_types_df.empty:
+        export_df = pd.merge(export_df, creative_types_df[['id', 'name']], left_on='creative_type_id', right_on='id', how='left').rename(columns={'name': 'Creative Type'}).drop(columns=['id', 'creative_type_id'], errors='ignore')
+    else: export_df['Creative Type'] = ""
+
+    # Rename existing columns for the output
+    export_df = export_df.rename(columns={
+        'title': 'Title',
+        'date': 'Date',
+        'source_link': 'Source Link',
+        'ext_link': 'External Link'
+    })
+
+    # Strict column filtering and ordering
+    final_cols = REQUIRED_TABS["AssetLibrary"]
+    for c in final_cols:
+        if c not in export_df.columns:
+            export_df[c] = ""
+
+    export_df = export_df[final_cols].fillna("")
+    save_data("AssetLibrary", export_df)
 
 # --- UTILS ---
 
@@ -294,7 +342,6 @@ def page_my_timesheet(user):
     else:
         df_display = pd.DataFrame(columns=["Date", "Title", "Client", "Creative Type", "Asset Category", "Source Link", "External Link", "Time Spent (Hrs)", "Amount"])
 
-    # Configuration Options
     client_options = clients_df['name'].tolist() if not clients_df.empty else []
     asset_options = assets_df['name'].tolist() if not assets_df.empty else []
     creative_options = creative_types_df['name'].tolist() if not creative_types_df.empty else []
@@ -308,7 +355,7 @@ def page_my_timesheet(user):
             "Title": st.column_config.TextColumn("Title Asset Pack", required=True, width="medium"),
             "Client": st.column_config.SelectboxColumn("Client/Service", options=client_options, required=True, width="medium"),
             "Creative Type": st.column_config.SelectboxColumn("Creative Type", options=creative_options, required=True, width="medium"),
-            "Asset Category": st.column_config.SelectboxColumn("Asset Category (Content Type)", options=asset_options, required=True, width="medium"),
+            "Asset Category": st.column_config.SelectboxColumn("Asset Category", options=asset_options, required=True, width="medium"),
             "Source Link": st.column_config.LinkColumn("Source Link (Drive/Canva)", width="medium"),
             "External Link": st.column_config.LinkColumn("External Link", width="medium"),
             "Time Spent (Hrs)": st.column_config.NumberColumn("Hours", min_value=0.0, step=0.5, required=True, width="small"),
@@ -354,6 +401,10 @@ def page_my_timesheet(user):
 
             final_prod_db = pd.concat([prod_db_clean, pd.DataFrame(new_prod_rows)], ignore_index=True)
             save_data("ProductionEntries", final_prod_db)
+            
+            # --- TRIGGERS ASSET LIBRARY SYNC ---
+            update_asset_library()
+            
             st.success("Assets List Updated!")
             time.sleep(1)
             st.rerun()
@@ -434,14 +485,13 @@ def page_workload_details(user):
         st.subheader("Raw Production Export")
         st.caption("A fully mapped view of all assets produced for easy exporting/reporting.")
         if not filtered_prod.empty:
-            # Safely merge everything for a clean export table
             export_df = filtered_prod.copy()
             if not users_df.empty:
                 export_df = pd.merge(export_df, users_df[['id', 'name']], left_on='user_id', right_on='id', how='left').rename(columns={'name': 'Creative (Employee)'}).drop(columns=['id'])
             if not clients_df.empty:
                 export_df = pd.merge(export_df, clients_df[['id', 'name']], left_on='client_id', right_on='id', how='left').rename(columns={'name': 'Client/Service'}).drop(columns=['id'])
             if not assets_df.empty:
-                export_df = pd.merge(export_df, assets_df[['id', 'name']], left_on='asset_id', right_on='id', how='left').rename(columns={'name': 'Asset Category (Content Type)'}).drop(columns=['id'])
+                export_df = pd.merge(export_df, assets_df[['id', 'name']], left_on='asset_id', right_on='id', how='left').rename(columns={'name': 'Asset Category'}).drop(columns=['id'])
             if not creative_types_df.empty:
                 export_df = pd.merge(export_df, creative_types_df[['id', 'name']], left_on='creative_type_id', right_on='id', how='left').rename(columns={'name': 'Creative Type'}).drop(columns=['id'])
             
@@ -451,7 +501,7 @@ def page_workload_details(user):
             }
             export_df = export_df.rename(columns=clean_columns)
             
-            cols_to_display = ['Delivered On', 'Title Asset Pack', 'Source Link', 'External Link', 'Client/Service', 'Qty', 'Time Spent (Hrs)', 'Creative Type', 'Asset Category (Content Type)', 'Creative (Employee)']
+            cols_to_display = ['Delivered On', 'Title Asset Pack', 'Source Link', 'External Link', 'Client/Service', 'Qty', 'Time Spent (Hrs)', 'Creative Type', 'Asset Category', 'Creative (Employee)']
             existing_cols = [c for c in cols_to_display if c in export_df.columns]
             
             st.dataframe(export_df[existing_cols], use_container_width=True)
@@ -638,7 +688,7 @@ def page_admin_data():
                 st.rerun()
 
     with row1_c2:
-        st.subheader("Asset Categories (Content Types)")
+        st.subheader("Asset Categories")
         assets_df = load_data("Assets")
         with st.form("add_ass"):
             na = st.text_input("New Asset Category")
@@ -669,6 +719,13 @@ def page_admin_data():
             save_data("CreativeTypes", edited_ct)
             st.success("Updated!")
             st.rerun()
+
+    st.divider()
+    st.subheader("Asset Library Sync")
+    st.caption("Manually force a rebuild of the marketer's Asset Library tab. (This happens automatically when employees save assets).")
+    if st.button("🔄 Sync Asset Library Now"):
+        update_asset_library()
+        st.success("Asset Library successfully synced and ready for Marketers!")
 
 def page_my_profile(user):
     st.header("👤 My Profile")
