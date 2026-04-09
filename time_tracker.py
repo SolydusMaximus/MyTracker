@@ -84,9 +84,10 @@ def load_data(tab_name):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         return df
-    except Exception:
-        time.sleep(2)
-        return pd.DataFrame(columns=REQUIRED_TABS.get(tab_name, []))
+    except Exception as e:
+        # 🔴 THE FIX: If the connection fails, stop the app completely to protect the database!
+        st.error("⚠️ Connection to Google Sheets was interrupted by Google. Please refresh the page to try again.")
+        st.stop()
 
 def save_data(tab_name, df):
     client = get_sheet_client()
